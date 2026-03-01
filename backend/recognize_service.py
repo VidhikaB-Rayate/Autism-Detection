@@ -1,0 +1,86 @@
+import cv2 as cv
+import numpy as np
+import os
+
+def get_resource_path(filename):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, filename)
+
+try:
+    # Use local haar_cascade.xml
+    cascade_path = get_resource_path("haar_cascade.xml")
+    if os.path.exists(cascade_path):
+        haar = cv.CascadeClassifier(cascade_path)
+    else:
+        # Fallback to cv2 default if local is missing
+        print(f"Warning: local haar_cascade.xml not found at {cascade_path}. Using default.")
+        cascade_path = cv.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        haar = cv.CascadeClassifier(cascade_path)
+    
+    # Load recognizer
+    recognizer_path = get_resource_path("autism_Recognizer.yml")
+    
+    if os.path.exists(recognizer_path):
+        faces_recog = cv.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
+        faces_recog.read(recognizer_path)
+        print(f"Model loaded from {recognizer_path}")
+    else:
+        faces_recog = None
+        print(f"Warning: autism_Recognizer.yml not found at {recognizer_path}. Face recognition will be disabled.")
+
+except Exception as e:
+    print(f"Error loading models: {e}")
+    faces_recog = None
+
+child = ["Autistic", "Non Autistic"]
+
+def detect_faces(image_np):
+    gray = cv.cvtColor(image_np, cv.COLOR_BGR2GRAY)    
+    detected_faces = haar.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=7,
+        minSize=(80, 80)
+    )
+    return detected_faces, gray
+
+def predict_faces_and_annotate(image_np, detected_faces, gray):
+    # Work on a copy to avoid modifying original array in place if needed elsewhere
+    result_image = image_np.copy()
+    
+    predictions = []
+    
+    for (x, y, w, h) in detected_faces:
+        face_roi = gray[y:y+h, x:x+w]
+        face_resized = cv.resize(face_roi, (150, 150))
+        # Ensure correct type
+        face_resized = np.array(face_resized, dtype=np.uint8)
+        
+        if faces_recog:
+            try:
+                label, confidence = faces_recog.predict(face_resized)
+                # Safe access to child list
+                pred_label = child[label] if label < len(child) else "Unknown"
+                text = f"{pred_label} ({confidence:.2f})"
+            except Exception as e:
+                print(f"Prediction error: {e}")
+                pred_label = "Error"
+                text = "Model Error"
+                confidence = 0.0
+        else:
+            # Fallback if model missing
+            pred_label = "Model Missing"
+            text = "Model Not Loaded"
+            confidence = 0.0
+        
+        color = (0, 255, 0) # Green
+        cv.rectangle(result_image, (x, y), (x+w, y+h), color, 2)
+        cv.putText(result_image, text, (x, y-6), cv.FONT_HERSHEY_COMPLEX, 0.5, color, 2)
+        
+        predictions.append({
+            "box": [int(x), int(y), int(w), int(h)],
+            "label": pred_label,
+            "confidence": float(confidence)
+        })
+        
+    return result_image, predictions
